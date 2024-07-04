@@ -18,6 +18,8 @@ impl Into<String> for Symbol {
 }
 
 mod tests {
+    use super::Symbol;
+
     #[test]
     fn symbol_to_string() {
         assert_eq!(Symbol::from("").to_string(), "");

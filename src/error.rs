@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
     InvalidSyntax
 }
@@ -13,6 +13,10 @@ impl Error {
     pub fn new(kind: ErrorKind) -> Self {
         Self { kind, message: "".to_string() }
     }
+
+    pub fn kind(&self) -> ErrorKind { self.kind }
+
+    pub fn message(&self) -> &String { &self.message }
 }
 
 impl core::fmt::Display for Error {
@@ -22,6 +26,12 @@ impl core::fmt::Display for Error {
 }
 
 impl core::error::Error for Error {}
+
+impl<S: Into<String>> From<(ErrorKind, S)> for Error {
+    fn from(value: (ErrorKind, S)) -> Self {
+        Self { kind: value.0, message: value.1.into() }
+    }
+}
 
 mod tests {
     use super::Error;

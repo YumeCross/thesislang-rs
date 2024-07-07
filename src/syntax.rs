@@ -51,10 +51,40 @@ impl TryFrom<Token> for Symbol {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     List(Vec<Node>),
     Symbol(Symbol)
+}
+
+impl Node {
+    pub fn push(&mut self, node: Node) -> &mut Node{
+        self.as_mut().push(node);
+        match self {
+            Node::List(list) => list.last_mut().unwrap(),
+            _ => panic!()
+        }
+    }
+
+}
+
+impl AsMut<Vec<Node>> for Node {
+    fn as_mut(&mut self) -> &mut Vec<Node> {
+        match self {
+            Node::List(list) => list,
+            _ => panic!()
+        }
+    }
+}
+
+
+impl AsRef<Vec<Node>> for Node {
+    fn as_ref(&self) -> &Vec<Node> {
+        match self {
+            Self::List(vec) => vec,
+            _ => panic!()
+        }
+    }
 }
 
 impl Display for Node {
@@ -63,6 +93,8 @@ impl Display for Node {
         match self {
             Node::List(nodes) => {
                 if nodes.is_empty() { return write!(f, "()"); }
+
+                if nodes.len() == 1 { return write!(f, "({})", nodes[0]) }
 
                 write!(f, "({} ", nodes[0])?;
                 for node in nodes[1..nodes.len() - 1].iter() {
@@ -76,7 +108,9 @@ impl Display for Node {
 }
 
 mod tests {
+    #[allow(unused_imports)]
     use crate::parser::Token;
+    #[allow(unused_imports)]
     use super::{Node, Symbol};
 
     #[test]

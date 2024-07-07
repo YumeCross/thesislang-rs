@@ -34,6 +34,7 @@ impl<S: Into<String>> From<(ErrorKind, S)> for Error {
 }
 
 mod tests {
+    #[allow(unused_imports)]
     use super::Error;
 
     #[test]

@@ -1,4 +1,6 @@
+use crate::error::Error;
 use crate::seq;
+use crate::syntax::Node;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token(String);
@@ -61,15 +63,18 @@ impl LexicalParser {
 
     pub fn parse_c(&mut self, ch: char) {
         match ch {
-            '(' => self.push_token("(".into()),
-            ')' => {
-                if !self.buf.is_empty() { self.push_buf_as_token() }
+            '(' | '[' | '{' => {
+                self.push_token("(".into());
+            }
+            ')' | ']' | '}'=> {
+                self.try_collect_buf();
                 self.push_token(")".into())
             }
-            '\'' | '"' => todo!("Add string parsing."),
+            ',' | ';' => todo!("Add delimiter parsing."),
+            '\'' | '"' => todo!("Add string literal parsing."),
             ch => {
                 if ch.is_ascii_whitespace() || ch == '\x0B' {
-                    if !self.buf.is_empty() { self.push_buf_as_token() }
+                    self.try_collect_buf()
                 } else {
                     self.buf.push(ch)
                 }
@@ -81,29 +86,88 @@ impl LexicalParser {
 
     pub fn parse_str(&mut self, source: &str) {
         for ch in source.chars() { self.parse_c(ch) }
+        self.try_collect_buf();
     }
 
+    #[inline]
     fn push_token(&mut self, token: Token) {
         self.results.push((self.pos, token))
     }
 
+    #[inline]
     fn push_buf_as_token(&mut self) {
         self.results.push((self.pos, core::mem::take(&mut self.buf).into()))
     }
 
+    /// Try to collect the buffer
+    #[inline]
+    fn try_collect_buf(&mut self) {
+        if !self.buf.is_empty() { self.push_buf_as_token() }
+    }
+}
+
+pub struct SyntacticParser {
+    tree: Node,
+}
+
+impl SyntacticParser {
+    pub fn new() -> Self {
+        Self { tree: Node::List(vec![]) }
+    }
+
+    pub fn parse(&mut self, tokens: Vec<Token>) {
+        // let mut nest: usize = 0;
+        let mut current: &mut Node = &mut self.tree;
+        use Node::*;
+        for token in tokens {
+            match token.0.as_str() {
+                "(" => seq!(/* nest += 1, */ current = self.tree.push(List(vec![]))),
+                ")" => seq!(/* nest -= 1 */), // TODO: Set `current` to the previous one.
+                _ => {
+                    current.push(Symbol(token.try_into().unwrap_or_else(|err: Error| {
+                        // TODO: Diagnostics message output.
+                        panic!("{}", err.message());
+                    })));
+                }
+            }
+        }
+    }
+
+    pub fn tree(self) -> Node {
+        self.tree
+    }
 }
 
 mod tests {
-    use super::{LexicalParser, Token};
+    #[allow(unused_imports)]
+    use crate::syntax::Node;
+    #[allow(unused_imports)]
+    use super::{LexicalParser, SyntacticParser, Token};
 
+    #[allow(unused)]
     fn strs_to_tokens(strs: Vec<&str>) -> Vec<Token> {
         strs.into_iter().map(|string| string.into()).collect()
     }
 
     #[test]
     fn lexical_parse_str() {
-        let mut lexer = LexicalParser::new();
+        let mut lexer;
+        lexer = LexicalParser::new();
         lexer.parse_str("($if #t #t #f)");
         assert_eq!(*lexer.tokens(), strs_to_tokens(vec!["(", "$if", "#t", "#t", "#f", ")"]));
+        lexer = LexicalParser::new();
+        lexer.parse_str("(eval     ())\n(display)");
+        assert_eq!(*lexer.tokens(), strs_to_tokens(vec!["(", "eval", "(", ")", ")", "(", "display", ")"]));
+    }
+
+    #[test]
+    fn syntactic_parse_tokens() {
+        use Node::*;
+        let mut lexer = LexicalParser::new();
+        lexer.parse_str("apply display +");
+        let mut parser = SyntacticParser::new();
+        parser.parse(lexer.tokens());
+        assert_eq!(parser.tree(), 
+            List(vec![Symbol("apply".into()), Symbol("display".into()), Symbol("+".into())]));
     }
 }

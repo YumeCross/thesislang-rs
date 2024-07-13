@@ -1,21 +1,26 @@
 use std::collections::HashMap;
 
 use crate::{if_or, seq};
+use crate::error::{Error, ErrorKind};
+
 
 #[derive(Debug, Clone, Copy)]
 pub struct Arg {
     id: (&'static str, char),
     optional: bool,
+    /// Determine whether to stop parsing the rest args.
+    interrupt: bool,
     parameterized: Parameter,
     prefix: char,
     info: (&'static str, &'static str), // (Description, Details)
 }
 
 impl Arg {
-    pub fn new(id: &'static str, opt: bool) -> Self {
+    pub fn new(id: &'static str) -> Self {
         let mut this = Self {
             id: (id, '\0'),
-            optional: opt,
+            optional: false,
+            interrupt: false,
             parameterized: Parameter::No,
             prefix: '\0',
             info: ("", ""),
@@ -24,7 +29,10 @@ impl Arg {
             if id.len() < 4 {
                 panic!("Error: The id must has more than 4 characters.")
             }
-            this.prefix = '-'
+            this.prefix = '-';
+            this.optional = true;
+        } else {
+            this.parameterized = Parameter::Required
         }
         this
     }
@@ -49,6 +57,10 @@ impl Arg {
         seq!(self.info.1 = content, self)
     }
 
+    pub fn interrupt(mut self) -> Self {
+        seq!(self.interrupt = true, self)
+    }
+
     pub fn try_get_parameter(&self, parameter: Option<&String>) -> String {
         use Parameter::*;
         match self.parameterized {
@@ -61,12 +73,18 @@ impl Arg {
     }
 
     pub fn help(&self) -> String {
-        format!("{} {}\n      {} {}", self.id.0, {
-            match self.parameterized {
-                Parameter::Optional(default) => format!("[default: {}]", default),
-                _ => "".to_string()
-            }
-        }, self.info.0, self.info.1)
+        format!(
+            "{} {}\n      {} {}",
+            self.id.0,
+            {
+                match self.parameterized {
+                    Parameter::Optional(default) => format!("[default: {}]", default),
+                    _ => "".to_string(),
+                }
+            },
+            self.info.0,
+            self.info.1
+        )
     }
 }
 
@@ -77,16 +95,28 @@ pub enum Parameter {
     Required,
 }
 
+impl From<Parameter> for u8 {
+    fn from(value: Parameter) -> Self {
+        match value {
+            Parameter::No => 0u8,
+            Parameter::Optional(_) => 1u8,
+            Parameter::Required => 2u8,
+        }
+    }
+}
+
 pub struct Command {
     exec_name: &'static str,
+    help_content: &'static str,
     args: HashMap<String, Arg>,
     pos_args: Vec<Arg>,
 }
 
 impl Command {
-    pub fn new(exec_name: &'static str) -> Self {
+    pub fn new(exec_name: &'static str, help_content: &'static str,) -> Self {
         Self {
             exec_name,
+            help_content,
             args: HashMap::new(),
             pos_args: vec![],
         }
@@ -106,33 +136,33 @@ impl Command {
         }
     }
 
-    pub fn match_with(&self, args: Vec<String>) -> HashMap<String, String> {
-        let mut expect_parameter: bool = false;
+    pub fn match_with(&self, args: Vec<String>) -> Result<HashMap<String, String>, Error> {
+        let mut expect_flag: u8 = 0;
         let mut pos_parameters: Vec<String> = vec![];
         let mut results: HashMap<String, String> = HashMap::new();
         for (i, val) in args.iter().enumerate() {
-            if !expect_parameter {
-                match self.args.get(val) {
-                    Some(arg) => {
-                        if !results.contains_key(&arg.id.0[1..]) {
-                            // Note: The key for insertion has no "--".
-                            results.insert(
-                                arg.id.0[2..].to_string(),
-                                arg.try_get_parameter(args.get(i + 1)),
-                            );
-                            continue;
-                        } else {
-                            panic!("Error: Duplicate parameter of '{}' was found.", arg.id.0)
-                        }
-                    }
-                    None => pos_parameters.push(val.clone()),
-                }
-            }
-            if expect_parameter {
-                expect_parameter = false
+            if expect_flag == 1 || expect_flag == 2 {
+                seq!(expect_flag = 0, break)
             };
+            match self.args.get(val) {
+                Some(arg) => {
+                    if !results.contains_key(&arg.id.0[1..]) {
+                        // Note: The key for insertion has no "--".
+                        results.insert(
+                            arg.id.0[2..].to_string(),
+                            arg.try_get_parameter(args.get(i + 1)),
+                        );
+                        if_or!(arg.interrupt, return Ok(results));
+                        expect_flag = arg.parameterized.into();
+                        continue;
+                    } else {
+                        panic!("Error: Duplicate parameter of '{}' was found.", arg.id.0)
+                    }
+                }
+                None => pos_parameters.push(val.clone()),
+            }
         }
-        if expect_parameter {
+        if expect_flag == 2 {
             panic!("Error: Required parameter not found.")
         }
         let pos_param_len = pos_parameters.len();
@@ -142,6 +172,7 @@ impl Command {
         if pos_param_len > self.pos_args.len() {
             panic!("Error: Too many parameters received.")
         }
+
         for arg in &self.pos_args {
             if_or!(
                 !arg.optional,
@@ -157,12 +188,12 @@ impl Command {
             used_pos_arg += 1;
         }
         if used_pos_arg < required_pos_arg {
-            panic!(
+            return Err(Error::new(ErrorKind::CommandFailed).with_message(format!(
                 "Error: Required argument '{}' was not found.",
                 required_arg_id
-            )
+            )));
         }
-        results
+        Ok(results)
     }
 
     pub fn print_help(&self) {
@@ -177,22 +208,53 @@ impl Command {
         };
         let arg_helps = {
             let mut string = String::new();
-            let mut added_args: Vec<&str> = vec![];
-            added_args.reserve(self.args.len() / 2);
-            for arg in self.args.values() {
-                if added_args.contains(&arg.id.0) { break }
-                string += format!("  {}\n", arg.help()).as_str();
-                added_args.push(arg.id.0);
+            for (id, arg) in &self.args {
+                if id.len() < 4 { continue; }
+                string += format!("\n   {}", arg.help()).as_str();
             }
             string
         };
+        let exec_name = self.exec_name;
+        let help_content = self.help_content;
         println!(
-r#"Usage: {} [options] {}
-{}"#,
-            self.exec_name, pos_args, arg_helps
+            r#"Usage: {exec_name} [options] {pos_args}
+      {help_content}
+
+Options:{arg_helps}"#
         )
     }
 }
 
-// TODO: Add tests.
-mod tests {}
+#[cfg(test)]
+mod tests {
+    use super::{Arg, Command, Parameter::*};
+
+    #[test]
+    fn command_match_with_1() {
+        use std::collections::HashMap;
+
+        let mut command = Command::new("cli-test", "");
+        command.add_arg(
+            Arg::new("--help")
+                .short_id('h')
+                .parameterize(Optional(""))
+                .interrupt(),
+        );
+        command.add_arg(Arg::new("--version").short_id('v').interrupt());
+        let mut map: HashMap<String, String>;
+        map = command.match_with(vec!["--help".into(), "test".into()]).unwrap();
+        assert_eq!(map, HashMap::from([("help".into(), "test".into())]));
+        map = command.match_with(vec!["--help".into()]).unwrap();
+        assert_eq!(map, HashMap::from([("help".into(), "".into())]));
+        map = command.match_with(vec!["--version".into(), "--help".into()]).unwrap();
+        assert_eq!(map, HashMap::from([("version".into(), "".into())]));
+    }
+
+    #[test]
+    fn command_match_with_2() {
+        let mut command = Command::new("cli-test", "");
+        command.add_arg(Arg::new("--version").short_id('v').interrupt());
+        command.add_arg(Arg::new("script"));
+        assert_eq!(command.match_with(vec![]).unwrap_err().message(), "Error: Required argument 'script' was not found.");
+    }
+}

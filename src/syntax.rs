@@ -107,10 +107,9 @@ impl Display for Node {
     }
 }
 
+#[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
     use crate::parser::Token;
-    #[allow(unused_imports)]
     use super::{Node, Symbol};
 
     #[test]

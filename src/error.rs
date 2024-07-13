@@ -1,5 +1,8 @@
+use crate::seq;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
+    CommandFailed,
     InvalidSyntax
 }
 
@@ -17,6 +20,10 @@ impl Error {
     pub fn kind(&self) -> ErrorKind { self.kind }
 
     pub fn message(&self) -> &String { &self.message }
+
+    pub fn with_message(mut self, content: String) -> Self {
+        seq!(self.message = content, self)
+    }
 }
 
 impl core::fmt::Display for Error {
@@ -33,8 +40,8 @@ impl<S: Into<String>> From<(ErrorKind, S)> for Error {
     }
 }
 
+#[cfg(test)]
 mod tests {
-    #[allow(unused_imports)]
     use super::Error;
 
     #[test]

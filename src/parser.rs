@@ -1,12 +1,20 @@
-use crate::error::Error;
-use crate::seq;
-use crate::syntax::Node;
+use std::fmt::Display;
+
+use crate::error::{Error, ErrorKind};
+use crate::{if_or, seq};
+use crate::syntax::{Node, Symbol};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token(String);
 
 impl AsRef<str> for Token {
     fn as_ref(&self) -> &str { self.0.as_str() }
+}
+
+impl Display for Token {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.0)
+    }
 }
 
 impl From<&str> for Token {
@@ -21,6 +29,21 @@ impl From<String> for Token {
 
 impl Into<String> for Token {
     fn into(self) -> String { self.0 }
+}
+
+impl Token {
+    pub fn match_left_parentheses(&self, other: &String) -> Result<bool, Error> {
+        let error = Error::new(ErrorKind::InvalidSyntax);
+        match self.0.as_str() {
+            ")" => if_or!(other == "(", Ok(true), Err(
+                error.with_message("No corresponding '(' can be found.".to_owned()))),
+            "]" => if_or!(other == "[", Ok(true), Err(
+                error.with_message("No corresponding '[' can be found.".to_owned()))),
+            "}" => if_or!(other == "{", Ok(true), Err(
+                error.with_message("No corresponding '{' can be found.".to_owned()))),
+            _ => panic!("Error: Not a parentheses.")
+        }
+    }
 }
 
 /// Representing the current position as (line, column) of a source parser.
@@ -64,21 +87,16 @@ impl LexicalParser {
     pub fn parse_c(&mut self, ch: char) {
         match ch {
             '(' | '[' | '{' => {
-                self.push_token("(".into());
+                self.push_token(String::from(ch).into());
             }
             ')' | ']' | '}'=> {
                 self.try_collect_buf();
-                self.push_token(")".into())
+                self.push_token(String::from(ch).into())
             }
-            ',' | ';' => todo!("Add delimiter parsing."),
+            ',' | ';' => self.push_token(String::from(ch).into()),
             '\'' | '"' => todo!("Add string literal parsing."),
-            ch => {
-                if ch.is_ascii_whitespace() || ch == '\x0B' {
-                    self.try_collect_buf()
-                } else {
-                    self.buf.push(ch)
-                }
-            }
+            ch if ch.is_ascii_whitespace() || ch == '\x0B' => self.try_collect_buf(),
+            ch => self.buf.push(ch)
         }
 
         if ch != '\n' { self.pos.next_col() } else { self.pos.next_ln() }
@@ -115,19 +133,37 @@ impl SyntacticParser {
         Self { tree: Node::List(vec![]) }
     }
 
+    // TODO: Trace source position.
     pub fn parse(&mut self, tokens: Vec<Token>) {
-        // let mut nest: usize = 0;
-        let mut current: &mut Node = &mut self.tree;
-        use Node::*;
+        let mut nest: (i32, Vec<String>) = (0, vec![]); // (Nesting Depth, Parentheses Kind)
+        let mut current = &mut self.tree;
+
         for token in tokens {
             match token.0.as_str() {
-                "(" => seq!(/* nest += 1, */ current = self.tree.push(List(vec![]))),
-                ")" => seq!(/* nest -= 1 */), // TODO: Set `current` to the previous one.
+                "(" | "[" | "{" => {
+                    nest.0 += 1;
+                    nest.1.push(token.0.to_string());
+                    current = current.push(Node::List(vec![]));
+                }
+                ")" | "]" | "}" => {
+                    nest.0 -= 1;
+                    let last = nest.1.last().unwrap_or_else(|| {
+                        panic!("{}", 
+                        Error::new(ErrorKind::InvalidSyntax)
+                                .with_message(format!("No corresponding '{token}' can be found.")))
+                    });
+                    let _ = token.match_left_parentheses(last).is_err_and(|err| panic!("{err}"));
+                    nest.1.pop();
+                    current = &mut self.tree;
+                    for _ in 0..nest.0 {
+                        if let Node::List(ref mut list) = current {
+                            current = list.last_mut().unwrap();
+                        }
+                    }
+                }
                 _ => {
-                    current.push(Symbol(token.try_into().unwrap_or_else(|err: Error| {
-                        // TODO: Diagnostics message output.
-                        panic!("{}", err.message());
-                    })));
+                    let symbol = Symbol::try_from(token);
+                    current.push(Node::Symbol(symbol.unwrap_or_else(|err| panic!("{err}"))));
                 }
             }
         }
@@ -138,14 +174,18 @@ impl SyntacticParser {
     }
 }
 
+#[allow(unused)]
+pub struct InfixTransformer {}
+
+impl InfixTransformer {}
+
 #[cfg(test)]
 mod tests {
     use crate::syntax::Node;
     use super::{LexicalParser, SyntacticParser, Token};
 
-    #[allow(unused)]
-    fn strs_to_tokens(strs: Vec<&str>) -> Vec<Token> {
-        strs.into_iter().map(|string| string.into()).collect()
+    fn to_tokens(vector: Vec<&str>) -> Vec<Token> {
+        vector.into_iter().map(|string| string.into()).collect()
     }
 
     #[test]
@@ -153,20 +193,49 @@ mod tests {
         let mut lexer;
         lexer = LexicalParser::new();
         lexer.parse_str("($if #t #t #f)");
-        assert_eq!(*lexer.tokens(), strs_to_tokens(vec!["(", "$if", "#t", "#t", "#f", ")"]));
+        assert_eq!(*lexer.tokens(), to_tokens(vec!["(", "$if", "#t", "#t", "#f", ")"]));
         lexer = LexicalParser::new();
         lexer.parse_str("(eval     ())\n(display)");
-        assert_eq!(*lexer.tokens(), strs_to_tokens(vec!["(", "eval", "(", ")", ")", "(", "display", ")"]));
+        assert_eq!(*lexer.tokens(), to_tokens(vec!["(", "eval", "(", ")", ")", "(", "display", ")"]));
     }
 
     #[test]
     fn syntactic_parse_tokens() {
         use Node::*;
-        let mut lexer = LexicalParser::new();
+        let mut lexer: LexicalParser;
+        let mut parser: SyntacticParser;
+        
+        lexer = LexicalParser::new();
         lexer.parse_str("apply display +");
-        let mut parser = SyntacticParser::new();
+        parser = SyntacticParser::new();
         parser.parse(lexer.tokens());
         assert_eq!(parser.tree(), 
             List(vec![Symbol("apply".into()), Symbol("display".into()), Symbol("+".into())]));
+        
+        parser = SyntacticParser::new();
+        lexer = LexicalParser::new();
+        lexer.parse_str("apply display (cons (list $if #t) [cons (list* #t #f) ()])");
+        parser.parse(lexer.tokens());
+        assert_eq!(parser.tree(),
+            List(vec!["apply".into(), "display".into(), 
+                List(vec!["cons".into(), 
+                    List(vec!["list".into(), "$if".into(), "#t".into()]),
+                    List(vec!["cons".into(), 
+                        List(vec!["list*".into(), "#t".into(), "#f".into()]),
+                        List(vec![])]
+                    )
+                ])        
+            ])
+        )
+    }
+
+    #[test]
+    fn syntactic_parse_parentheses_match() {
+        use Node::*;
+        let mut lexer = LexicalParser::new();
+        lexer.parse_str("([{}])");
+        let mut parser = SyntacticParser::new();
+        parser.parse(lexer.tokens());
+        assert_eq!(parser.tree(), List(vec![List(vec![List(vec![List(vec![])])])]));
     }
 }

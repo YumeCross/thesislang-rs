@@ -6,7 +6,7 @@ use crate::error::{Error, ErrorKind};
 
 #[derive(Debug, Clone, Copy)]
 pub struct Arg {
-    id: (&'static str, char),
+    id: (&'static str, char), // (Id, ShortId)
     optional: bool,
     /// Determine whether to stop parsing the rest args.
     interrupt: bool,
@@ -73,17 +73,26 @@ impl Arg {
     }
 
     pub fn help(&self) -> String {
+        let id = self.id.0;
+        let short_id = {
+            if self.id.1 != '\0' {
+                format!(", -{}", self.id.1)
+            } else {
+                "".into()
+            }
+        };
+        let info_0 = self.info.0;
+        let info_1 = if self.info.1 == "" { "".into() } else {
+            "\n      ".to_owned() + self.info.1
+        };
         format!(
-            "{} {}\n      {} {}",
-            self.id.0,
+            "{id}{short_id} {}\n      {info_0} {info_1}",
             {
                 match self.parameterized {
-                    Parameter::Optional(default) => format!("[default: {}]", default),
+                    Parameter::Optional(default) => format!("[default: {default}]"),
                     _ => "".to_string(),
                 }
-            },
-            self.info.0,
-            self.info.1
+            }
         )
     }
 }
@@ -109,6 +118,7 @@ pub struct Command {
     exec_name: &'static str,
     help_content: &'static str,
     args: HashMap<String, Arg>,
+    added_arg_names: Vec<String>,
     pos_args: Vec<Arg>,
 }
 
@@ -118,6 +128,7 @@ impl Command {
             exec_name,
             help_content,
             args: HashMap::new(),
+            added_arg_names: vec![],
             pos_args: vec![],
         }
     }
@@ -125,6 +136,7 @@ impl Command {
     pub fn add_arg(&mut self, arg: Arg) {
         if arg.prefix != '\0' {
             self.args.insert(arg.id.0.into(), arg);
+            self.added_arg_names.push(arg.id.0.into());
             if arg.id.1 != '\0' {
                 self.args.insert(format!("-{}", arg.id.1), arg);
             }
@@ -208,8 +220,10 @@ impl Command {
         };
         let arg_helps = {
             let mut string = String::new();
-            for (id, arg) in &self.args {
-                if id.len() < 4 { continue; }
+            // Don't use direct iteration to make sure
+            // the output order follows the the argument order
+            for arg_id in &self.added_arg_names {
+                let arg = self.args[arg_id];
                 string += format!("\n   {}", arg.help()).as_str();
             }
             string
@@ -217,7 +231,7 @@ impl Command {
         let exec_name = self.exec_name;
         let help_content = self.help_content;
         println!(
-            r#"Usage: {exec_name} [options] {pos_args}
+            r#"Usage: {exec_name} [options]{pos_args}
       {help_content}
 
 Options:{arg_helps}"#
@@ -237,7 +251,7 @@ mod tests {
         command.add_arg(
             Arg::new("--help")
                 .short_id('h')
-                .parameterize(Optional(""))
+                .parameterize(Optional("\"\""))
                 .interrupt(),
         );
         command.add_arg(Arg::new("--version").short_id('v').interrupt());
@@ -245,7 +259,7 @@ mod tests {
         map = command.match_with(vec!["--help".into(), "test".into()]).unwrap();
         assert_eq!(map, HashMap::from([("help".into(), "test".into())]));
         map = command.match_with(vec!["--help".into()]).unwrap();
-        assert_eq!(map, HashMap::from([("help".into(), "".into())]));
+        assert_eq!(map, HashMap::from([("help".into(), "\"\"".into())]));
         map = command.match_with(vec!["--version".into(), "--help".into()]).unwrap();
         assert_eq!(map, HashMap::from([("version".into(), "".into())]));
     }

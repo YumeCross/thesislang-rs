@@ -107,6 +107,12 @@ impl Display for Node {
     }
 }
 
+impl From<&str> for Node {
+    fn from(value: &str) -> Self {
+        Self::Symbol(value.into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::parser::Token;

@@ -1,8 +1,6 @@
 use std::collections::HashMap;
 
 use crate::{if_or, seq};
-use crate::error::{Error, ErrorKind};
-
 
 #[derive(Debug, Clone, Copy)]
 pub struct Arg {
@@ -148,7 +146,7 @@ impl Command {
         }
     }
 
-    pub fn match_with(&self, args: Vec<String>) -> Result<HashMap<String, String>, Error> {
+    pub fn match_with(&self, args: Vec<String>) -> Result<HashMap<String, String>, String> {
         let mut expect_flag: u8 = 0;
         let mut pos_parameters: Vec<String> = vec![];
         let mut results: HashMap<String, String> = HashMap::new();
@@ -200,10 +198,10 @@ impl Command {
             used_pos_arg += 1;
         }
         if used_pos_arg < required_pos_arg {
-            return Err(Error::new(ErrorKind::CommandFailed).with_message(format!(
-                "Error: Required argument '{}' was not found.",
+            return Err(
+                format!("Error: Required argument '{}' was not found.",
                 required_arg_id
-            )));
+            ));
         }
         Ok(results)
     }
@@ -269,6 +267,6 @@ mod tests {
         let mut command = Command::new("cli-test", "");
         command.add_arg(Arg::new("--version").short_id('v').interrupt());
         command.add_arg(Arg::new("script"));
-        assert_eq!(command.match_with(vec![]).unwrap_err().message(), "Error: Required argument 'script' was not found.");
+        assert_eq!(command.match_with(vec![]).unwrap_err(), "Error: Required argument 'script' was not found.");
     }
 }

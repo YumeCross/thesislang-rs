@@ -43,6 +43,7 @@ impl TryFrom<Token> for Symbol {
     fn try_from(token: Token) -> Result<Self, Self::Error> {
         if Symbol::validate_token(&token) { Ok(Self(token.into())) }
         else {
+            // TODO: Adjust into builder form.
             Err(Error::from((
                 ErrorKind::InvalidSyntax,
                 format!("Unsupported literal appeared in symbol '{}'.", token.as_ref())
@@ -135,9 +136,6 @@ mod tests {
 
         let literal = "test-move".to_string();
         assert_eq!(Symbol::from(literal), Symbol::from("test-move"));
-
-        // The following commented code should raise a compiler diagnostic message and could not be compiled.
-        // Symbol::from(literal);
     }
 
     #[test]

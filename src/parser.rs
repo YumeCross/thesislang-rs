@@ -1,8 +1,21 @@
 use std::fmt::Display;
+use ariadne::{Color, Fmt, Label};
 
 use crate::error::{Error, ErrorKind};
 use crate::{if_or, seq};
 use crate::syntax::{Node, Symbol};
+
+#[derive(Debug)]
+pub struct SrcInfo {
+    pub(crate) id: String,
+    pub(crate) text: String
+}
+
+impl SrcInfo {
+    pub fn new<S: Into<String>>(id: S, text: S) -> Self {
+        Self { id: id.into(), text: text.into() }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token(String);
@@ -32,36 +45,50 @@ impl Into<String> for Token {
 }
 
 impl Token {
-    pub fn match_left_parentheses(&self, other: &String) -> Result<bool, Error> {
-        let error = Error::new(ErrorKind::InvalidSyntax);
+    pub fn as_left_parentheses(&self) -> &str {
         match self.0.as_str() {
-            ")" => if_or!(other == "(", Ok(true), Err(
-                error.with_message("No corresponding '(' can be found.".to_owned()))),
-            "]" => if_or!(other == "[", Ok(true), Err(
-                error.with_message("No corresponding '[' can be found.".to_owned()))),
-            "}" => if_or!(other == "{", Ok(true), Err(
-                error.with_message("No corresponding '{' can be found.".to_owned()))),
+            ")" => "(",
+            "]" => "[",
+            "}" => "{",
+            _ => panic!("Error: Not a parentheses.")
+        }
+    }
+
+    pub fn as_right_parentheses(&self) -> &str {
+        match self.0.as_str() {
+            "(" => ")",
+            "[" => "]",
+            "{" => "}",
+            _ => panic!("Error: Not a parentheses.")
+        }
+    }
+
+    pub fn match_left_parentheses(&self, other: &String) -> bool {
+        match self.0.as_str() {
+            ")" | "]" | "}" => if_or!(other == self.as_left_parentheses(), true, false),
             _ => panic!("Error: Not a parentheses.")
         }
     }
 }
 
-/// Representing the current position as (line, column) of a source parser.
+/// Representing the current position as (line, column, index) of a source parser.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub struct SourcePos(usize, usize);
+pub struct SourcePos(usize, usize, usize);
 
 impl SourcePos {
     pub fn ln(&self) -> usize { self.0 }
 
     pub fn col(&self) -> usize { self.1 }
 
-    pub fn next_ln(&mut self) { seq!(self.0 += 1, self.1 += 1) }
+    pub fn i(&self) -> usize { self.2 }
 
-    pub fn next_col(&mut self) { self.1 += 1 }
+    pub fn next_ln(&mut self) { seq!(self.0 += 1, self.1 += 1, self.2 += 1) }
+
+    pub fn next_col(&mut self) { seq!(self.1 += 1, self.2 += 1) }
 }
 
-impl From<(usize, usize)> for SourcePos {
-    fn from(value: (usize, usize)) -> Self { Self(value.0, value.1) }
+impl From<(usize, usize, usize)> for SourcePos {
+    fn from(value: (usize, usize, usize)) -> Self { Self(value.0, value.1, value.2) }
 }
 
 #[derive(Debug)]
@@ -73,11 +100,11 @@ pub struct LexicalParser {
 
 impl LexicalParser {
     pub fn new() -> Self {
-        Self { buf: "".to_string(), pos: (1, 1).into(), results: vec![] }
+        Self { buf: "".to_string(), pos: (1, 1, 1).into(), results: vec![] }
     }
 
-    pub fn results(&self) -> &Vec<(SourcePos, Token)> {
-        &self.results
+    pub fn results(self) -> Vec<(SourcePos, Token)> {
+        self.results
     }
 
     pub fn tokens(&self) -> Vec<Token> {
@@ -125,16 +152,90 @@ impl LexicalParser {
 }
 
 pub struct SyntacticParser {
+    src: SrcInfo,
     tree: Node,
 }
 
 impl SyntacticParser {
-    pub fn new() -> Self {
-        Self { tree: Node::List(vec![]) }
+    pub fn new(src: SrcInfo) -> Self {
+        Self { src, tree: Node::List(vec![]) }
     }
 
-    // TODO: Trace source position.
-    pub fn parse(&mut self, tokens: Vec<Token>) {
+    pub fn parse(&mut self) {
+        let mut nest: (i32, Vec<(SourcePos, String)>) = (0, vec![]); // (Nesting Depth, Parentheses Kind)
+        let mut current = &mut self.tree;
+
+        let tokens = {
+            let mut lexer = LexicalParser::new();
+            lexer.parse_str(&self.src.text);
+            lexer.results()
+        };
+
+        for (pos, token) in tokens {
+            match token.0.as_str() {
+                "(" | "[" | "{" => {
+                    nest.0 += 1;
+                    nest.1.push((pos, token.0.to_string()));
+                    current = current.push(Node::List(vec![]));
+                }
+                ")" | "]" | "}" => {
+                    nest.0 -= 1;
+                    let last = nest.1.last().unwrap_or_else(|| {
+                        Error::new(ErrorKind::InvalidSyntax)
+                            .with_message(
+                                format!("No corresponding '{}' can be found for '{token}'.",
+                                token.as_left_parentheses()))
+                            .with_span((pos.i()-1)..pos.i())
+                            .report_error(&self.src, pos, format!("Invalid '{token}' here."));
+                    });
+                    if !token.match_left_parentheses(&last.1) {
+                        use Color::*;
+                        Error::new(ErrorKind::InvalidSyntax)
+                            .with_message(
+                        format!(
+                    "'{}' is required, but only to found '{token}'", Token(last.1.clone()).as_right_parentheses()
+                                )
+                            )
+                            .with_span(pos.i()-1..pos.i())
+                            .with_label(
+                                Label::new((self.src.id.clone(), (last.0.2-1)..last.0.2))
+                                    .with_color(Fixed(86))
+                                    .with_message(
+                                        format!("Opening delimiter '{}{}", 
+                                            last.1.clone().fg(Red), "' occurred here.".fg(Cyan)).fg(Cyan))
+                                    .with_order(1)
+                            )
+                            .report_error(&self.src, pos,
+                            format!("Invalid closing '{}{}.", token.fg(Fixed(81)), "' here".fg(Red)).fg(Red).to_string())
+                    }
+                    nest.1.pop();
+                    current = &mut self.tree;
+                    for _ in 0..nest.0 {
+                        if let Node::List(ref mut list) = current {
+                            current = list.last_mut().unwrap();
+                        }
+                    }
+                }
+                _ => {
+                    let symbol = Symbol::try_from(token.0);
+                    current.push(Node::Symbol(symbol.unwrap_or_else(|err| panic!("{err}"))));
+                }
+            }
+        }
+
+        if nest.0 != 0 {
+            let last = nest.1.last().unwrap();
+            Error::new(ErrorKind::InvalidSyntax)
+                .with_message(
+                    format!("No corresponding '{}' for '{}' was found.", Token(last.1.clone()).as_right_parentheses(), last.1))
+                .with_span((last.0.i()-1)..last.0.i())
+                .report_error(&self.src, last.0,
+                    format!("Single '{}' found here.", last.1.clone().fg(Color::Red)));
+        }
+
+    }
+
+    pub fn parse_untraced(&mut self, tokens: Vec<Token>) {
         let mut nest: (i32, Vec<String>) = (0, vec![]); // (Nesting Depth, Parentheses Kind)
         let mut current = &mut self.tree;
 
@@ -147,12 +248,13 @@ impl SyntacticParser {
                 }
                 ")" | "]" | "}" => {
                     nest.0 -= 1;
-                    let last = nest.1.last().unwrap_or_else(|| {
+                    let _last = nest.1.last().unwrap_or_else(|| {
                         panic!("{}", 
                         Error::new(ErrorKind::InvalidSyntax)
                                 .with_message(format!("No corresponding '{token}' can be found.")))
                     });
-                    let _ = token.match_left_parentheses(last).is_err_and(|err| panic!("{err}"));
+                    // TODO: Adjust implementation.
+                    // let _ = token.match_left_parentheses(last).is_err_and(|err| panic!("{err}"));
                     nest.1.pop();
                     current = &mut self.tree;
                     for _ in 0..nest.0 {
@@ -182,7 +284,7 @@ impl InfixTransformer {}
 #[cfg(test)]
 mod tests {
     use crate::syntax::Node;
-    use super::{LexicalParser, SyntacticParser, Token};
+    use super::{SrcInfo, LexicalParser, SyntacticParser, Token};
 
     fn to_tokens(vector: Vec<&str>) -> Vec<Token> {
         vector.into_iter().map(|string| string.into()).collect()
@@ -200,22 +302,22 @@ mod tests {
     }
 
     #[test]
-    fn syntactic_parse_tokens() {
+    fn syntactic_parse_tokens_untraced() {
         use Node::*;
-        let mut lexer: LexicalParser;
         let mut parser: SyntacticParser;
         
-        lexer = LexicalParser::new();
-        lexer.parse_str("apply display +");
-        parser = SyntacticParser::new();
-        parser.parse(lexer.tokens());
+        parser = SyntacticParser::new(SrcInfo::new("test-1", "apply display +".into()));
+        parser.parse();
         assert_eq!(parser.tree(), 
             List(vec![Symbol("apply".into()), Symbol("display".into()), Symbol("+".into())]));
         
-        parser = SyntacticParser::new();
-        lexer = LexicalParser::new();
-        lexer.parse_str("apply display (cons (list $if #t) [cons (list* #t #f) ()])");
-        parser.parse(lexer.tokens());
+        parser = SyntacticParser::new(
+            SrcInfo::new(
+                "test-2",
+                "apply display (cons (list $if #t) [cons (list* #t #f) ()])".into()
+            )
+        );
+        parser.parse();
         assert_eq!(parser.tree(),
             List(vec!["apply".into(), "display".into(), 
                 List(vec!["cons".into(), 
@@ -232,10 +334,8 @@ mod tests {
     #[test]
     fn syntactic_parse_parentheses_match() {
         use Node::*;
-        let mut lexer = LexicalParser::new();
-        lexer.parse_str("([{}])");
-        let mut parser = SyntacticParser::new();
-        parser.parse(lexer.tokens());
+        let mut parser = SyntacticParser::new(SrcInfo::new("test-1", "([{}])"));
+        parser.parse();
         assert_eq!(parser.tree(), List(vec![List(vec![List(vec![List(vec![])])])]));
     }
 }

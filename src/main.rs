@@ -46,6 +46,10 @@ r#"The supported output targets are listed here. Note that only a work in progre
             // In the future, the implementation will only
             // evaluate the script without specifying '--output'.
             "script" => execute_script(val, map.get("output")).unwrap(),
+            "target" => match map.get("target").unwrap().as_str() {
+                "ast" => continue,
+                _ => panic!()
+            },
             _ => {}
         }
     }
@@ -62,10 +66,8 @@ fn execute_script(path: &String, out: Option<&String>) -> Result<(), std::io::Er
     }).unwrap_or_else(|err| {
         panic!("{err}");
     });
-    let mut lexer = LexicalParser::new();
-    let mut parser = SyntacticParser::new();
-        lexer.parse_str(&content);
-        parser.parse(lexer.tokens());
+    let mut parser = SyntacticParser::new(SrcInfo::new(path, &content));
+        parser.parse();
         match out {
             Some(out_path) => {
                 let mut file = File::create(out_path)?;

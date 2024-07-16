@@ -3,7 +3,7 @@ use core::fmt::Display;
 use crate::error::{Error, ErrorKind};
 use crate::parser::Token;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Symbol(String);
 
 impl Symbol {
@@ -18,6 +18,12 @@ impl Symbol {
             if "()[]{}\x0b".contains(ch) || ch.is_ascii_whitespace() { return false; }
         }
         true
+    }
+}
+
+impl AsRef<String> for Symbol {
+    fn as_ref(&self) -> &String {
+        &self.0
     }
 }
 

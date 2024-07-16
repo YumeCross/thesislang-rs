@@ -3,6 +3,8 @@ mod error;
 mod macros;
 mod parser;
 mod syntax;
+mod evaluation;
+mod interpreter;
 
 fn main() {
     use cli::*;

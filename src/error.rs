@@ -7,13 +7,17 @@ use crate::parser::{SourcePos, SrcInfo};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ErrorKind {
-    InvalidSyntax
+    InvalidSyntax,
+    FreeIdentifier,
+    TypeMismatch
 }
 
 impl ErrorKind {
     pub fn to_error_code(&self) -> &str {
         match &self {
-            Self::InvalidSyntax => "E01"
+            Self::InvalidSyntax => "E01",
+            Self::FreeIdentifier => "E02",
+            Self::TypeMismatch => "E03"
         }
     }
 }

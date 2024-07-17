@@ -20,3 +20,10 @@ macro_rules! seq {
         }
     };
 }
+
+#[macro_export]
+macro_rules! share {
+    ($expr: expr) => {
+        std::rc::Rc::new(std::cell::RefCell::new($expr))
+    };
+}

@@ -1,6 +1,7 @@
 use core::fmt::Display;
 
 use crate::error::{Error, ErrorKind};
+use crate::evaluation::Term;
 use crate::parser::Token;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -117,6 +118,24 @@ impl Display for Node {
 impl From<&str> for Node {
     fn from(value: &str) -> Self {
         Self::Symbol(value.into())
+    }
+}
+
+impl Into<Term> for Node {
+    fn into(self) -> Term {
+        match self {
+            Node::List(mut list) => {
+                let mut term = Term::new();
+                term.sub_terms = {
+                    let taken_vec = std::mem::take(&mut list);
+                    taken_vec.into_iter().map(|node| node.into()).collect()
+                };
+                term
+            },
+            Node::Symbol(symbol) => {
+                Term::from(symbol)
+            },
+        }
     }
 }
 

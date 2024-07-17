@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::LinkedList;
 
 use crate::error::{Error, ErrorKind};
@@ -9,7 +10,8 @@ use super::combiner::NativeFn;
 pub struct Term {
     has_value: bool,
     pub(crate) sub_terms: LinkedList<Term>,
-    pub(crate) value: TermValue
+    pub(crate) value: TermValue,
+    pub(crate) value_ref: RefCell<TermValue>
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,7 +28,8 @@ impl Term {
         Self {
             has_value: false,
             sub_terms: LinkedList::new(),
-            value: TermValue::Unit(UnitValue::Ignore)
+            value: TermValue::Unit(UnitValue::Ignore),
+            value_ref: RefCell::new(TermValue::Unit(UnitValue::Ignore))
         }
     }
 
@@ -104,6 +107,15 @@ macro_rules! impl_access {
         }
 
         impl TermAccess<$ty> for Term {}
+
+        impl From<$ty> for Term {
+            fn from(value: $ty) -> Term {
+                let mut term = Term::new();
+                term.has_value = true;
+                term.value = TermValue::$ty_id(value);
+                term
+            }
+        }
     };
 }
 

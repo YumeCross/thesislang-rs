@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::fmt::Display;
+use std::rc::Rc;
 use ariadne::{Color, Fmt, Label};
 
 use crate::error::{Error, ErrorKind};
@@ -152,12 +154,12 @@ impl LexicalParser {
 }
 
 pub struct SyntacticParser {
-    src: SrcInfo,
+    src: Rc<RefCell<SrcInfo>>,
     tree: Node,
 }
 
 impl SyntacticParser {
-    pub fn new(src: SrcInfo) -> Self {
+    pub fn new(src: Rc<RefCell<SrcInfo>>) -> Self {
         Self { src, tree: Node::List(vec![]) }
     }
 
@@ -165,9 +167,11 @@ impl SyntacticParser {
         let mut nest: (i32, Vec<(SourcePos, String)>) = (0, vec![]); // (Nesting Depth, Parentheses Kind)
         let mut current = &mut self.tree;
 
+        let src = self.src.borrow();
+
         let tokens = {
             let mut lexer = LexicalParser::new();
-            lexer.parse_str(&self.src.text);
+            lexer.parse_str(&src.text);
             lexer.results()
         };
 
@@ -186,7 +190,7 @@ impl SyntacticParser {
                                 format!("No corresponding '{}' can be found for '{token}'.",
                                 token.as_left_parentheses()))
                             .with_span((pos.i()-1)..pos.i())
-                            .report_error(&self.src, pos, format!("Invalid '{token}' here."));
+                            .report_error(&src, pos, format!("Invalid '{token}' here."));
                     });
                     if !token.match_left_parentheses(&last.1) {
                         use Color::*;
@@ -198,14 +202,14 @@ impl SyntacticParser {
                             )
                             .with_span(pos.i()-1..pos.i())
                             .with_label(
-                                Label::new((self.src.id.clone(), (last.0.2-1)..last.0.2))
+                                Label::new((src.id.clone(), (last.0.2-1)..last.0.2))
                                     .with_color(Fixed(86))
                                     .with_message(
                                         format!("Opening delimiter '{}{}", 
                                             last.1.clone().fg(Red), "' occurred here.".fg(Cyan)).fg(Cyan))
                                     .with_order(1)
                             )
-                            .report_error(&self.src, pos,
+                            .report_error(&src, pos,
                             format!("Invalid closing '{}{}.", token.fg(Fixed(81)), "' here".fg(Red)).fg(Red).to_string())
                     }
                     nest.1.pop();
@@ -229,10 +233,9 @@ impl SyntacticParser {
                 .with_message(
                     format!("No corresponding '{}' for '{}' was found.", Token(last.1.clone()).as_right_parentheses(), last.1))
                 .with_span((last.0.i()-1)..last.0.i())
-                .report_error(&self.src, last.0,
+                .report_error(&src, last.0,
                     format!("Single '{}' found here.", last.1.clone().fg(Color::Red)));
         }
-
     }
 
     pub fn parse_untraced(&mut self, tokens: Vec<Token>) {
@@ -270,10 +273,15 @@ impl SyntacticParser {
             }
         }
     }
-
+    
+    pub fn reset(mut self) -> Node {
+        core::mem::replace(&mut self.tree, Node::List(vec![]))
+    }
+    
     pub fn tree(self) -> Node {
         self.tree
     }
+
 }
 
 #[allow(unused)]
@@ -283,7 +291,8 @@ impl InfixTransformer {}
 
 #[cfg(test)]
 mod tests {
-    use crate::syntax::Node;
+    use std::rc::Rc;
+    use crate::{share, syntax::Node};
     use super::{SrcInfo, LexicalParser, SyntacticParser, Token};
 
     fn to_tokens(vector: Vec<&str>) -> Vec<Token> {
@@ -306,16 +315,16 @@ mod tests {
         use Node::*;
         let mut parser: SyntacticParser;
         
-        parser = SyntacticParser::new(SrcInfo::new("test-1", "apply display +".into()));
+        parser = SyntacticParser::new(share!(SrcInfo::new("test-1", "apply display +".into())));
         parser.parse();
         assert_eq!(parser.tree(), 
             List(vec![Symbol("apply".into()), Symbol("display".into()), Symbol("+".into())]));
         
         parser = SyntacticParser::new(
-            SrcInfo::new(
+            share!(SrcInfo::new(
                 "test-2",
                 "apply display (cons (list $if #t) [cons (list* #t #f) ()])".into()
-            )
+            ))
         );
         parser.parse();
         assert_eq!(parser.tree(),
@@ -334,7 +343,7 @@ mod tests {
     #[test]
     fn syntactic_parse_parentheses_match() {
         use Node::*;
-        let mut parser = SyntacticParser::new(SrcInfo::new("test-1", "([{}])"));
+        let mut parser = SyntacticParser::new(share!(SrcInfo::new("test-1", "([{}])")));
         parser.parse();
         assert_eq!(parser.tree(), List(vec![List(vec![List(vec![List(vec![])])])]));
     }

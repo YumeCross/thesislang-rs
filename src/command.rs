@@ -36,7 +36,21 @@ impl Arg {
     }
 
     pub fn parameterize(mut self, parameterized: Parameter) -> Self {
-        seq!(self.parameterized = parameterized, self)
+        self.parameterized = parameterized;
+        if self.prefix == '\0' {
+            match parameterized {
+                Parameter::Optional(_) => self.optional = true,
+                _ => {}
+            }
+        }
+        self
+    }
+
+    pub fn get_default(&self) -> String {
+        match self.parameterized {
+            Parameter::Optional(s) => s.into(),
+            _ => panic!()
+        }
     }
 
     pub fn short_id(mut self, ch: char) -> Self {
@@ -186,7 +200,8 @@ impl Command {
         for arg in &self.pos_args {
             if_or!(
                 !arg.optional,
-                seq!(required_pos_arg += 1, required_arg_id = arg.id.0)
+                seq!(required_pos_arg += 1, required_arg_id = arg.id.0),
+                seq!(results.insert(arg.id.0.into(), arg.get_default()), ())
             );
             if used_pos_arg >= pos_param_len {
                 continue;

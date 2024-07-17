@@ -1,4 +1,5 @@
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -9,13 +10,17 @@ use super::term::{Term, *};
 
 #[derive(Debug)]
 pub struct Context {
-    current_env: Env,
-    src: Rc<SrcInfo>
+    env: Env,
+    src: Rc<RefCell<SrcInfo>>
 }
 
 impl Context {
-    pub fn new(src: Rc<SrcInfo>) -> Self {
-        Self { current_env: Env::new(), src }
+    pub fn new(src: Rc<RefCell<SrcInfo>>) -> Self {
+        Self { env: Env::new(), src }
+    }
+
+    pub fn eval(&mut self, term: Term) {
+        
     }
 
     pub fn reduce_leaf(&mut self, term: &mut Term) {
@@ -24,13 +29,14 @@ impl Context {
             Ok(symbol) => name = symbol.to_string(),
             Err(_) => return (),
         }
-        match self.current_env.lookup(&name) {
+        match self.env.lookup(&name) {
             Some(ref mut term_ref) => {
                 // TODO
+                term.value_ref = term_ref.value_ref.clone()
             },
             None => Error::new(ErrorKind::FreeIdentifier)
                 .with_message(format!("Failed to resolve '{name}'."))
-                .report_error(&self.src, (0, 0, 0).into(), 
+                .report_error(&self.src.borrow(), (0, 0, 0).into(), 
                     "".to_string()),
         }
     }

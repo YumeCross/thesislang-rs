@@ -48,6 +48,16 @@ impl Default for Term {
     }
 }
 
+impl std::fmt::Display for Term {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if !self.has_value {
+            write!(f, "{:?}", self.sub_terms)
+        } else {
+            write!(f, "{:?}", self.value)
+        }
+    }
+}
+
 pub trait Access<T> {
     fn access(&self) -> &T;
 }

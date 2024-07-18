@@ -1,6 +1,6 @@
 use std::process::exit;
 
-use ariadne::{Fmt, Label, Report, ReportKind, Source};
+use ariadne::{Fmt, Label, Report, ReportBuilder, ReportKind, Source};
 
 use crate::seq;
 use crate::parser::{SourcePos, SrcInfo};
@@ -27,12 +27,13 @@ pub struct Error {
     kind: ErrorKind,
     message: String,
     span: std::ops::Range<usize>,
-    labels: Vec<Label<(String, std::ops::Range<usize>)>>
+    labels: Vec<Label<(String, std::ops::Range<usize>)>>,
+    pub(crate) report: Option<ReportBuilder<'static, (String, std::ops::Range<usize>)>>
 }
 
 impl Error {
     pub fn new(kind: ErrorKind) -> Self {
-        Self { kind, message: "".to_string(), span: 0..0, labels: vec![] }
+        Self { kind, message: "".to_string(), span: 0..0, labels: vec![], report: None }
     }
 
     pub fn kind(&self) -> ErrorKind { self.kind }
@@ -49,6 +50,29 @@ impl Error {
 
     pub fn with_span(mut self, span: std::ops::Range<usize>) -> Self {
         seq!(self.span = span, self)
+    }
+
+    pub fn return_error(mut self, src: &SrcInfo, pos: SourcePos, label: String) -> Self {
+        // let kind = format!("{:?}", self.kind);
+        // To make it appear like rust-style error.
+        print!("{}", "error".fg(ariadne::Color::Red));
+
+        let mut builder = 
+        Report::build(ReportKind::Custom("\x08", ariadne::Color::Red), &src.id, pos.i())
+            .with_code(self.kind.to_error_code())
+            .with_message(self.message())
+            .with_label(
+                Label::new((src.id.clone(), self.span.clone()))
+                    .with_message(label)
+                    .with_color(ariadne::Color::Red)
+            );
+
+        for label in &self.labels {
+            builder = builder.with_label(label.clone());
+        }
+
+        self.report = Some(builder);
+        self
     }
 
     pub fn report_error(self, src: &SrcInfo, pos: SourcePos, label: String) -> ! {
@@ -89,7 +113,7 @@ impl core::error::Error for Error {}
 
 impl<S: Into<String>> From<(ErrorKind, S)> for Error {
     fn from(value: (ErrorKind, S)) -> Self {
-        Self { kind: value.0, message: value.1.into(), span: 0..0, labels: vec![] }
+        Self { kind: value.0, message: value.1.into(), span: 0..0, labels: vec![], report: None }
     }
 }
 

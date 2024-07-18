@@ -97,12 +97,16 @@ impl From<(usize, usize, usize)> for SourcePos {
 pub struct LexicalParser {
     buf: String,
     pos: SourcePos,
-    results: Vec<(SourcePos, Token)>
+    results: Vec<(SourcePos, Token)>,
+    // 0 indicates initial state
+    // 1 indicates parsing string literal
+    // 2 indicates to unescape characters
+    parsing_context: usize
 }
 
 impl LexicalParser {
     pub fn new() -> Self {
-        Self { buf: "".to_string(), pos: (1, 1, 1).into(), results: vec![] }
+        Self { buf: "".to_string(), pos: (1, 1, 1).into(), results: vec![], parsing_context: 0 }
     }
 
     pub fn results(self) -> Vec<(SourcePos, Token)> {
@@ -115,6 +119,16 @@ impl LexicalParser {
 
     pub fn parse_c(&mut self, ch: char) {
         match ch {
+            ch if self.parsing_context == 1 => {
+                self.buf.push(ch);
+                if ch == '\\' {
+                    self.parsing_context = 2;
+                }
+
+                if ch == '"' || ch == '\'' {
+                    self.parsing_context = 0;
+                }
+            },
             '(' | '[' | '{' => {
                 self.push_token(String::from(ch).into());
             }
@@ -123,7 +137,14 @@ impl LexicalParser {
                 self.push_token(String::from(ch).into())
             }
             ',' | ';' => self.push_token(String::from(ch).into()),
-            '\'' | '"' => todo!("Add string literal parsing."),
+            '\'' | '"'=> {
+                self.buf.push(ch);
+                if self.parsing_context == 0 {
+                    self.parsing_context = 1;
+                } else if self.parsing_context == 2 {
+                    self.parsing_context = 1;
+                }
+            },
             ch if ch.is_ascii_whitespace() || ch == '\x0B' => self.try_collect_buf(),
             ch => self.buf.push(ch)
         }
@@ -161,6 +182,13 @@ pub struct SyntacticParser {
 impl SyntacticParser {
     pub fn new(src: Rc<RefCell<SrcInfo>>) -> Self {
         Self { src, tree: Node::List(vec![]) }
+    }
+
+    fn first_quoted(s: &str) -> bool {
+        match s.chars().nth(0).unwrap() {
+            '\'' | '"' => true,
+            _ => false
+        }
     }
 
     pub fn parse(&mut self) {
@@ -238,6 +266,98 @@ impl SyntacticParser {
         }
     }
 
+    pub fn try_parse(&mut self) -> Result<(), Error> {
+        let mut nest: (i32, Vec<(SourcePos, String)>) = (0, vec![]); // (Nesting Depth, Parentheses Kind)
+        let mut current = &mut self.tree;
+
+        let src = self.src.borrow();
+
+        let tokens = {
+            let mut lexer = LexicalParser::new();
+            lexer.parse_str(&src.text);
+            lexer.results()
+        };
+
+        for (pos, token) in tokens {
+            match token.0.as_str() {
+                "(" | "[" | "{" => {
+                    nest.0 += 1;
+                    nest.1.push((pos, token.0.to_string()));
+                    current = current.push(Node::List(vec![]));
+                }
+                ")" | "]" | "}" => {
+                    nest.0 -= 1;
+                    let wrapped_last = nest.1.last();
+                    let last: &(SourcePos, String);
+                    match wrapped_last {
+                        Some(val) => last = val,
+                        None => return Err(Error::new(ErrorKind::InvalidSyntax)
+                        .with_message(
+                            format!("No corresponding '{}' can be found for '{token}'.",
+                            token.as_left_parentheses()))
+                        .with_span((pos.i()-1)..pos.i())
+                        .return_error(&src, pos, format!("Invalid '{token}' here.")))
+                    }
+                    if !token.match_left_parentheses(&last.1) {
+                        use Color::*;
+                        return Err(Error::new(ErrorKind::InvalidSyntax)
+                            .with_message(
+                        format!(
+                    "'{}' is required, but only to found '{token}'", Token(last.1.clone()).as_right_parentheses()
+                                )
+                            )
+                            .with_span(pos.i()-1..pos.i())
+                            .with_label(
+                                Label::new((src.id.clone(), (last.0.2-1)..last.0.2))
+                                    .with_color(Fixed(86))
+                                    .with_message(
+                                        format!("Opening delimiter '{}{}", 
+                                            last.1.clone().fg(Red), "' occurred here.".fg(Cyan)).fg(Cyan))
+                                    .with_order(1)
+                            )
+                            .return_error(&src, pos,
+                            format!("Invalid closing '{}{}.", token.fg(Fixed(81)), "' here".fg(Red)).fg(Red).to_string()))
+                    }
+                    nest.1.pop();
+                    current = &mut self.tree;
+                    for _ in 0..nest.0 {
+                        if let Node::List(ref mut list) = current {
+                            current = list.last_mut().unwrap();
+                        }
+                    }
+                },
+                s if Self::first_quoted(s) => {
+                    match Self::try_unquote(s) {
+                        Ok(unquoted) => current.push(Node::String(unquoted)),
+                        Err(err) => return Err(err)
+                    };
+                }
+                _ => {
+                    let symbol = Symbol::try_from(token.0);
+                    current.push(Node::Symbol(symbol.unwrap_or_else(|err| panic!("{err}"))));
+                }
+            }
+        }
+
+        Ok(if nest.0 != 0 {
+            let last = nest.1.last().unwrap();
+            return Err(Error::new(ErrorKind::InvalidSyntax)
+                .with_message(
+                    format!("No corresponding '{}' for '{}' was found.", Token(last.1.clone()).as_right_parentheses(), last.1))
+                .with_span((last.0.i()-1)..last.0.i())
+                .return_error(&src, last.0,
+                    format!("Single '{}' found here.", last.1.clone().fg(Color::Red))));
+        })
+    }
+
+    pub fn try_unquote(s: &str) -> Result<String, Error> {
+        let first = s.chars().nth(0).unwrap();
+        let end = s.chars().last().unwrap();
+        if first == end {
+            Ok(s[1..s.len()-1].to_string())
+        } else { Err(Error::new(ErrorKind::InvalidSyntax)) }
+    }
+
     pub fn parse_untraced(&mut self, tokens: Vec<Token>) {
         let mut nest: (i32, Vec<String>) = (0, vec![]); // (Nesting Depth, Parentheses Kind)
         let mut current = &mut self.tree;
@@ -273,7 +393,7 @@ impl SyntacticParser {
             }
         }
     }
-    
+
     pub fn reset(mut self) -> Node {
         core::mem::replace(&mut self.tree, Node::List(vec![]))
     }
@@ -291,7 +411,6 @@ impl InfixTransformer {}
 
 #[cfg(test)]
 mod tests {
-    use std::rc::Rc;
     use crate::{share, syntax::Node};
     use super::{SrcInfo, LexicalParser, SyntacticParser, Token};
 
@@ -308,6 +427,14 @@ mod tests {
         lexer = LexicalParser::new();
         lexer.parse_str("(eval     ())\n(display)");
         assert_eq!(*lexer.tokens(), to_tokens(vec!["(", "eval", "(", ")", ")", "(", "display", ")"]));
+    }
+
+    #[test]
+    fn lexical_parse_literal() {
+        let mut lexer: LexicalParser;
+        lexer = LexicalParser::new();
+        lexer.parse_str(r#"($if "test=parsing" #t)"#);
+        println!("{:?}", lexer.results())
     }
 
     #[test]

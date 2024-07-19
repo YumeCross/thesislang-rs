@@ -1,7 +1,8 @@
 use std::cell::RefCell;
 use std::fmt::Display;
+use std::process::exit;
 use std::rc::Rc;
-use ariadne::{Color, Fmt, Label};
+use ariadne::{Color, Fmt, Label, Source};
 
 use crate::error::{Error, ErrorKind};
 use crate::{if_or, seq};
@@ -192,78 +193,14 @@ impl SyntacticParser {
     }
 
     pub fn parse(&mut self) {
-        let mut nest: (i32, Vec<(SourcePos, String)>) = (0, vec![]); // (Nesting Depth, Parentheses Kind)
-        let mut current = &mut self.tree;
-
-        let src = self.src.borrow();
-
-        let tokens = {
-            let mut lexer = LexicalParser::new();
-            lexer.parse_str(&src.text);
-            lexer.results()
-        };
-
-        for (pos, token) in tokens {
-            match token.0.as_str() {
-                "(" | "[" | "{" => {
-                    nest.0 += 1;
-                    nest.1.push((pos, token.0.to_string()));
-                    current = current.push(Node::List(vec![]));
-                }
-                ")" | "]" | "}" => {
-                    nest.0 -= 1;
-                    let last = nest.1.last().unwrap_or_else(|| {
-                        Error::new(ErrorKind::InvalidSyntax)
-                            .with_message(
-                                format!("No corresponding '{}' can be found for '{token}'.",
-                                token.as_left_parentheses()))
-                            .with_span((pos.i()-1)..pos.i())
-                            .report_error(&src, pos, format!("Invalid '{token}' here."));
-                    });
-                    if !token.match_left_parentheses(&last.1) {
-                        use Color::*;
-                        Error::new(ErrorKind::InvalidSyntax)
-                            .with_message(
-                        format!(
-                    "'{}' is required, but only to found '{token}'", Token(last.1.clone()).as_right_parentheses()
-                                )
-                            )
-                            .with_span(pos.i()-1..pos.i())
-                            .with_label(
-                                Label::new((src.id.clone(), (last.0.2-1)..last.0.2))
-                                    .with_color(Fixed(86))
-                                    .with_message(
-                                        format!("Opening delimiter '{}{}", 
-                                            last.1.clone().fg(Red), "' occurred here.".fg(Cyan)).fg(Cyan))
-                                    .with_order(1)
-                            )
-                            .report_error(&src, pos,
-                            format!("Invalid closing '{}{}.", token.fg(Fixed(81)), "' here".fg(Red)).fg(Red).to_string())
-                    }
-                    nest.1.pop();
-                    current = &mut self.tree;
-                    for _ in 0..nest.0 {
-                        if let Node::List(ref mut list) = current {
-                            current = list.last_mut().unwrap();
-                        }
-                    }
-                }
-                _ => {
-                    let symbol = Symbol::try_from(token.0);
-                    current.push(Node::Symbol(symbol.unwrap_or_else(|err| panic!("{err}"))));
-                }
-            }
-        }
-
-        if nest.0 != 0 {
-            let last = nest.1.last().unwrap();
-            Error::new(ErrorKind::InvalidSyntax)
-                .with_message(
-                    format!("No corresponding '{}' for '{}' was found.", Token(last.1.clone()).as_right_parentheses(), last.1))
-                .with_span((last.0.i()-1)..last.0.i())
-                .report_error(&src, last.0,
-                    format!("Single '{}' found here.", last.1.clone().fg(Color::Red)));
-        }
+        let _ = self.try_parse().is_err_and(|err| {
+            let _ = err.report
+                .unwrap()
+                .finish()
+                .print((self.src.borrow().id.clone(), Source::from(&self.src.borrow().text)))
+                .unwrap();
+            exit(1);
+        });
     }
 
     pub fn try_parse(&mut self) -> Result<(), Error> {
@@ -331,6 +268,14 @@ impl SyntacticParser {
                         Ok(unquoted) => current.push(Node::String(unquoted)),
                         Err(err) => return Err(err)
                     };
+                },
+                n if n.chars().nth(0).unwrap().is_digit(10) => {
+                    for ch in n.chars() {
+                        if !ch.is_digit(10) {
+                            return Err(Error::new(ErrorKind::InvalidSyntax))
+                        }
+                    }
+                    current.push(Node::Number(token.0));
                 }
                 _ => {
                     let symbol = Symbol::try_from(token.0);
@@ -358,6 +303,7 @@ impl SyntacticParser {
         } else { Err(Error::new(ErrorKind::InvalidSyntax)) }
     }
 
+    // TODO: Update
     pub fn parse_untraced(&mut self, tokens: Vec<Token>) {
         let mut nest: (i32, Vec<String>) = (0, vec![]); // (Nesting Depth, Parentheses Kind)
         let mut current = &mut self.tree;
@@ -434,7 +380,15 @@ mod tests {
         let mut lexer: LexicalParser;
         lexer = LexicalParser::new();
         lexer.parse_str(r#"($if "test=parsing" #t)"#);
-        println!("{:?}", lexer.results())
+        assert_eq!(lexer.tokens(), to_tokens(vec!["(", "$if", "\"test=parsing\"", "#t", ")"]))
+    }
+
+    #[test]
+    fn lexical_parse_int() {
+        let mut lexer = LexicalParser::new();
+        lexer.parse_str("($lambda (f) (f (+ 0 1)))");
+        assert_eq!(lexer.tokens(),
+            to_tokens(vec!["(", "$lambda", "(", "f", ")", "(", "f", "(", "+", "0", "1", ")", ")", ")"]));
     }
 
     #[test]
@@ -464,7 +418,26 @@ mod tests {
                     )
                 ])        
             ])
-        )
+        );
+    }
+
+    #[test]
+    fn syntactic_parse_tokens() {
+        use Node::*;
+        let mut parser;
+
+        parser = SyntacticParser::new(
+            share!(SrcInfo::new(
+                "test-3-for-integers",
+                "apply + (list 1 2)"
+            ))
+        );
+        parser.try_parse().unwrap();
+        assert_eq!(parser.tree(),
+            List(vec!["apply".into(), "+".into(), 
+                List(vec!["list".into(), 1.into(), 2.into()])
+            ])
+        );
     }
 
     #[test]

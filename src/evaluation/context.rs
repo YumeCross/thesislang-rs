@@ -4,7 +4,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use crate::error::{Error, ErrorKind};
-use crate::if_or;
 use crate::parser::SrcInfo;
 use crate::syntax::Symbol;
 use super::term::{Term, *};
@@ -20,10 +19,10 @@ impl Context {
         Self { env: Env::new(), src }
     }
 
+    // TODO: Add complete reduction implementation
     pub fn eval(&mut self, mut term: Term) -> Result<(), Error> {
         if !term.is_branch() {
-            self.reduce_leaf(&mut term);
-            Ok(())
+            self.reduce_leaf(&mut term)
         } else {
             self.reduce_branch(&mut term)
         }
@@ -51,6 +50,7 @@ impl Context {
     pub fn reduce_branch(&mut self, term: &mut Term) -> Result<(), Error> {
         if term.is_branch() {
             let front = term.sub_terms.front_mut().unwrap();
+            // TODO: Complete reduction.
             match self.reduce_leaf(front) {
                 Err(err) => return Err(err),
                 _ => {}

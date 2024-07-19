@@ -4,7 +4,7 @@ use std::rc::Rc;
 use ariadne::Source;
 
 use crate::parser::*;
-use crate::evaluation::{Context, Term};
+use crate::evaluation::Context;
 
 #[derive(Debug)]
 pub struct Interpreter {
@@ -43,6 +43,7 @@ impl Interpreter {
         });
     }
 
+    // TODO: Add history
     pub fn run_interactive(&mut self) -> ! {
         use std::io::{*, Write};
         self.interactive = true;

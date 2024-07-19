@@ -62,6 +62,7 @@ impl TryFrom<Token> for Symbol {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Node {
     List(Vec<Node>),
+    Number(String),
     String(String),
     Symbol(Symbol)
 }
@@ -111,6 +112,7 @@ impl Display for Node {
                 }
                 write!(f, "{})", nodes.last().unwrap())
             },
+            Node::Number(n) => write!(f, "{}", n),
             Node::String(s) => write!(f, "{}", s),
             Node::Symbol(symbol) => write!(f, "{}", symbol)
         }
@@ -120,6 +122,12 @@ impl Display for Node {
 impl From<&str> for Node {
     fn from(value: &str) -> Self {
         Self::Symbol(value.into())
+    }
+}
+
+impl From<i64> for Node {
+    fn from(value: i64) -> Self {
+        Self::Number(value.to_string())
     }
 }
 
@@ -134,6 +142,9 @@ impl Into<Term> for Node {
                 };
                 term
             },
+            Node::Number(n) => {
+                Term::from(n)
+            }
             Node::String(s) => {
                 Term::from(s)
             }

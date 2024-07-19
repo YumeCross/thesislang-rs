@@ -17,6 +17,7 @@ pub struct Term {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TermValue {
     Bool(BooleanValue),
+    Int(i64),
     PrimitiveFn(NativeFn),
     Str(String),
     Sym(Symbol),
@@ -137,6 +138,7 @@ pub enum UnitValue {
 type BooleanValue = bool;
 
 impl_access!(BooleanValue, Bool);
+impl_access!(i64, Int);
 impl_access!(NativeFn, PrimitiveFn);
 impl_access!(UnitValue, Unit);
 impl_access!(String, Str);
